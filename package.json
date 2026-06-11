@@ -1,0 +1,14 @@
+{
+  "name": "legal-claim-grounding-addin",
+  "version": "1.0.0",
+  "description": "Word add-in for legal claim grounding via Isaacus",
+  "scripts": {
+    "start": "office-addin-debugging start addin/manifest.xml desktop --app word",
+    "stop": "office-addin-debugging stop addin/manifest.xml",
+    "validate": "office-addin-manifest validate addin/manifest.xml"
+  },
+  "devDependencies": {
+    "office-addin-debugging": "^6.1.1",
+    "office-addin-manifest": "^1.10.0"
+  }
+}

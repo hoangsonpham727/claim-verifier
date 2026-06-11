@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grounding"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "isaacus>=0.21.1",
+    "semchunk",
+    "spacy>=3.7",
+    "numpy>=1.26",
+    "pymupdf",
+    "python-docx",
+    "python-dotenv",
+    "fastapi",
+    "python-multipart",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "streamlit",
+    "pytest",
+    "pandas",
+    "scikit-learn",
+    "aiohttp",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

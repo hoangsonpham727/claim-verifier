@@ -1,0 +1,29 @@
+.venv/
+.env
+.claude/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+dist/
+build/
+*.pyc
+.DS_Store
+vector_cache/
+*.jsonl.cache
+
+# Node / Office add-in tooling
+node_modules/
+
+# Machine-local editor/agent settings
+.claude/settings.local.json
+
+# ContractNLI eval data (large, separately licensed — download locally, do not redistribute)
+eval/contract-nli/
+eval/*.zip
+
+# Cached calibration scores (regenerate with eval/calibrate.py cache)
+eval/scores_*.json
+
+# Office temp/lock files
+~$*

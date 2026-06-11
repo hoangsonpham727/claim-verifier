@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Legal Claim Grounding</title>
+  <link rel="stylesheet" href="taskpane.css"/>
+  <!-- Office.js must load before any Office API calls -->
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-row">
+    <img src="logo-48.png" alt="" class="header-logo"/>
+    <h1>Legal Claim Grounding</h1>
+  </div>
+  <p>Select any claim in your document to verify it</p>
+</header>
+
+<!-- ── Scrollable body ─────────────────────────────────────────────── -->
+<div class="pane-body">
+
+  <!-- Sources section -->
+  <section id="sources-section">
+    <div class="section-header">
+      <span class="section-title">Sources</span>
+    </div>
+
+    <div id="source-list">
+      <!-- Populated by renderSources() -->
+    </div>
+
+    <!-- Add-source form -->
+    <details id="add-source" style="margin-top:8px">
+      <summary style="cursor:pointer;font-size:12px;color:var(--color-accent);font-weight:600;list-style:none;padding:4px 0">
+        + Add source
+      </summary>
+
+      <p class="mode-hint" style="margin-top:8px">
+        The open document is always checked automatically. Add external sources to
+        verify against other contracts or exhibits.
+      </p>
+
+      <!-- Mode switcher -->
+      <div class="mode-switch" role="tablist">
+        <button class="mode-btn active" data-mode="file">Upload file</button>
+        <button class="mode-btn"        data-mode="paste">Paste</button>
+      </div>
+
+      <!-- Upload-file panel -->
+      <div class="mode-panel" data-panel="file">
+        <label class="file-drop" for="src-file">
+          <span>Choose PDF, DOCX or TXT files</span>
+          <span class="file-drop-hint">or drag them here</span>
+          <input id="src-file" type="file" accept=".pdf,.docx,.txt" multiple hidden/>
+        </label>
+        <div id="upload-status"></div>
+      </div>
+
+      <!-- Paste panel -->
+      <div class="mode-panel" data-panel="paste" hidden>
+        <div class="add-source-form">
+          <textarea id="src-text" placeholder="Paste the full source text here…"></textarea>
+          <input id="src-id" type="text" placeholder="Source name (optional)"/>
+          <button class="btn btn-secondary" id="add-source-btn" style="width:100%">Add source</button>
+        </div>
+      </div>
+
+      <span id="src-error" class="src-error" style="display:none"></span>
+    </details>
+  </section>
+
+  <hr class="divider"/>
+
+  <!-- Selection state + verify button -->
+  <section id="verify-section">
+    <div id="claim-pill" class="claim-pill">
+      <span class="dot"></span> Select a claim in your document
+    </div>
+    <button id="verify-btn" class="btn btn-primary" disabled>
+      Verify selection
+    </button>
+  </section>
+
+  <hr class="divider"/>
+
+  <!-- Results -->
+  <section id="results-section">
+    <div class="section-header">
+      <span class="section-title">Results</span>
+    </div>
+    <div id="results-area">
+      <p class="status-msg">Select a claim in your document, add a source, then verify.</p>
+    </div>
+  </section>
+
+  <!-- API endpoint setting (collapsed by default) -->
+  <details style="margin-top:4px">
+    <summary style="cursor:pointer;font-size:11px;color:var(--color-text-muted);list-style:none">
+      API endpoint
+    </summary>
+    <div class="settings-row" style="margin-top:6px">
+      <input id="api-url-input" type="url" value="https://localhost:8000"
+             placeholder="https://localhost:8000"/>
+    </div>
+    <p style="font-size:10px;color:var(--color-text-muted);margin:4px 0 0">
+      Change this to your deployed FastAPI URL.
+    </p>
+  </details>
+
+</div><!-- /.pane-body -->
+
+<script src="taskpane.js"></script>
+</body>
+</html>
