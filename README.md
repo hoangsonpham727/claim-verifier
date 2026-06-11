@@ -47,15 +47,6 @@ Four signals per claim feed a sequential decision tree (`src/grounding/classify.
 `p_support` and `p_contra` are **independent** classifier calls (one on the claim, one on `"It is not the case that: {claim}"`) — they do not sum to 1. "Unaddressed" is detected when **both** are low, which means the source is genuinely silent (the classifier auto-chunks the full source, so this is robust to retrieval misses).
 
 Shipped thresholds (calibrated on ContractNLI dev, 1037 pairs): `τ_low=0.55, τ_con=0.7, τ_sup=0.85, τ_inex=0.9`.
-
-| Class | Precision | Recall | F1 |
-|---|---|---|---|
-| supported | 91.3% | 30.4% | 0.457 |
-| contradicted | 25.8% | 41.1% | 0.317 |
-| unaddressed | 58.0% | 68.6% | 0.628 |
-
-False-green rate (predicted supported, truth ≠ supported): **2.9%**. The operating point deliberately favors precision on `supported` — 91% precision is the trust guarantee; recall is sacrificed on purpose. See [Known limitations](#known-limitations).
-
 ---
 
 ## Repository layout
