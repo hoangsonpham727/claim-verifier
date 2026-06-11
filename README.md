@@ -194,15 +194,6 @@ python eval/calibrate.py report   --split dev    # apply shipped thresholds, pri
 `cache` makes the only API calls; `tune`/`diagnose`/`report` operate on the cached scores, so you can re-tune thresholds instantly without re-spending on the API. Re-cache only when models or prompts change.
 
 ---
-
-## Known limitations
-
-- **Contradiction detection is weak** (F1 ≈ 0.32). The negation-prompt `p_contra` barely separates classes — the universal classifier responds to topical relevance, not logical direction. The system ships a 3-way-reliable verdict (supported / unaddressed strong; contradicted directional only); a stronger contradiction signal would need a different elicitation and a re-cache.
-- **`supported` recall is low by design** (~30%). The operating point trades recall for 91% precision so a "supported" verdict can be trusted. Borderline cases surface as `weak`.
-- Span offsets are character positions within the returned passage, not the original source file.
-
----
-
 ## License
 
 Code in this repository is provided as-is. The ContractNLI dataset referenced for evaluation is distributed under its own terms and is not included here.
