@@ -23,7 +23,7 @@ from grounding.pipeline import verify
 # ── Page config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Legal Claim Grounding",
+    page_title="Claim Verifier",
     page_icon="⚖️",
     layout="wide",
 )
@@ -176,7 +176,7 @@ with st.sidebar:
 
 # ── Main — document input ─────────────────────────────────────────────────────
 
-st.title("Legal Claim Grounding")
+st.title("Claim Verifier")
 st.caption("Bind every cited claim in your document to the exact passage that supports — or contradicts — it.")
 
 doc_upload = st.file_uploader("Upload document (PDF / DOCX)", type=["pdf", "docx"], key="doc_upload")

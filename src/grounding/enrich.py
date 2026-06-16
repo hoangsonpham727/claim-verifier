@@ -16,6 +16,7 @@ from typing import Optional
 
 from isaacus.types.ilgs.v1 import Document
 
+from . import store
 from .client import get_client
 from .models import Source
 
@@ -38,18 +39,29 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _evict() -> None:
+    while len(_ENRICH_CACHE) > _CACHE_MAX:
+        _ENRICH_CACHE.popitem(last=False)
+
+
 def _cache_get(h: str) -> Optional[Document]:
-    doc = _ENRICH_CACHE.get(h)
+    doc = _ENRICH_CACHE.get(h)            # L1: in-memory
     if doc is not None:
         _ENRICH_CACHE.move_to_end(h)
+        return doc
+    doc = store.load_enrichment(h)        # L2: durable disk
+    if doc is not None:
+        _ENRICH_CACHE[h] = doc            # warm L1 (no disk re-write)
+        _ENRICH_CACHE.move_to_end(h)
+        _evict()
     return doc
 
 
 def _cache_put(h: str, doc: Document) -> None:
     _ENRICH_CACHE[h] = doc
     _ENRICH_CACHE.move_to_end(h)
-    while len(_ENRICH_CACHE) > _CACHE_MAX:
-        _ENRICH_CACHE.popitem(last=False)
+    _evict()
+    store.save_enrichment(h, doc)         # write-through to disk
 
 
 def _enrich_texts(texts: list[str]) -> list[Optional[Document]]:

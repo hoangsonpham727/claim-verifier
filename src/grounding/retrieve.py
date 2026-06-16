@@ -12,11 +12,12 @@ from typing import Optional
 
 import numpy as np
 
+from . import store
 from .client import get_client
 from .graph import SessionGraph, retrievable_nodes
 
 PREFILTER_K = 30   # embedder shortlist size before reranking
-RERANK_K = 5       # seeds returned
+RERANK_K = 3       # seeds returned
 _EMB_BATCH = 96
 _EMB_CACHE: dict[str, np.ndarray] = {}   # text hash → L2-normalized vector
 
@@ -58,7 +59,11 @@ def embed_segments(graph: SessionGraph) -> dict[str, np.ndarray]:
 
     for k in keys:
         h = _hash(graph.nodes[k].text)
-        cached = _EMB_CACHE.get(h)
+        cached = _EMB_CACHE.get(h)                # L1: in-memory
+        if cached is None:
+            cached = store.load_embedding(h)      # L2: durable disk
+            if cached is not None:
+                _EMB_CACHE[h] = cached            # warm L1
         if cached is not None:
             out[k] = cached
         else:
@@ -70,8 +75,10 @@ def embed_segments(graph: SessionGraph) -> dict[str, np.ndarray]:
         for k, vec in zip(bk, _embed(bt, "retrieval/document")):
             if vec is None:
                 continue
+            h = _hash(graph.nodes[k].text)
             arr = _normalize(np.asarray(vec, dtype=np.float32))
-            _EMB_CACHE[_hash(graph.nodes[k].text)] = arr
+            _EMB_CACHE[h] = arr
+            store.save_embedding(h, arr)          # write-through to disk
             out[k] = arr
 
     return out

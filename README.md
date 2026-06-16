@@ -1,4 +1,4 @@
-# Legal Claim Grounding
+# Claim Verifier
 
 Bind every cited claim in a legal document to the exact supporting passage in a source, and judge whether the source **supports**, **contradicts**, is **silent on**, or only **weakly** addresses it — each with a calibrated confidence and the precise supporting line.
 
@@ -162,6 +162,22 @@ The add-in lets you select any sentence in a Word document and verify it against
    Or copy `addin/manifest.xml` into `~/Library/Containers/com.microsoft.Word/Data/Documents/wef/` (Mac) and restart Word. On Windows, use **Insert → Add-ins → Upload My Add-in**.
 
 The add-in then appears as **Verify Claims** in the Word Home ribbon.
+
+---
+
+## Workspaces & caching
+
+The two expensive, API-backed artifacts — the ILDGS **enrichment** per source and the segment **embeddings** — are cached on disk under `CACHE_DIR` (default `./cache`, gitignored), keyed by content hash. Reopening an unchanged document **regenerates nothing**, even across server restarts; editing a clause re-enriches only that document and re-embeds only the changed segments. The caches sit behind the in-memory ones (memory → disk → API), so `verify` is unchanged and just gets fast.
+
+Per-document **workspaces** persist a user's sources and prior verdicts so a review can be resumed:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/workspace/{id}` | load saved sources + results (404 if none) |
+| PUT | `/workspace/{id}` | save sources + results for this document |
+| POST | `/index` | pre-warm the cache for a `{document, sources}` so the first verify is instant |
+
+The Word add-in stores a workspace id in the document's Office settings (it travels with the `.docx`), restores the sources and saved verdicts on open, and saves after each verify.
 
 ---
 

@@ -11,19 +11,25 @@ Docker:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path, PurePath
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from grounding.models import VerifyRequest, VerifyResponse
+from grounding import store
+from grounding.enrich import enrich_sources
+from grounding.graph import build_session_graph, retrievable_nodes
+from grounding.models import Source, VerifyRequest, VerifyResponse, Workspace
 from grounding.parse import count_pdf_pages, extract_text
 from grounding.pipeline import verify
+from grounding.retrieve import embed_segments
 
 app = FastAPI(
-    title="Isaacus Legal Claim Grounding",
+    title="Claim Verifier",
     version="0.1.0",
     description="Bind cited legal claims to exact source passages and judge support.",
 )
@@ -105,3 +111,46 @@ async def extract_endpoint(files: list[UploadFile] = File(...)) -> list[dict]:
             }
         )
     return results
+
+
+# ── Workspaces — per-document saved state (sources + prior results) ───────────
+
+@app.get("/workspace/{workspace_id}", response_model=Workspace)
+def get_workspace(workspace_id: str) -> Workspace:
+    data = store.load_workspace(workspace_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="No saved workspace.")
+    return Workspace.model_validate(data)
+
+
+@app.put("/workspace/{workspace_id}", response_model=Workspace)
+def put_workspace(workspace_id: str, ws: Workspace) -> Workspace:
+    ws.id = workspace_id
+    ws.updated_at = time.time()
+    store.save_workspace(workspace_id, ws.model_dump())
+    return ws
+
+
+# ── Index — pre-warm the durable cache so the first verify is instant ─────────
+
+class IndexRequest(BaseModel):
+    document: str = ""
+    sources: list[Source] = []
+
+
+@app.post("/index")
+async def index_endpoint(req: IndexRequest) -> dict:
+    """Enrich + embed the document and sources to populate the durable cache.
+
+    Returns the number of segments indexed. Cheap once the cache is warm (disk
+    hits), so the add-in can call it on open without cost on repeat visits.
+    """
+    graph_sources = list(req.sources)
+    if req.document.strip():
+        graph_sources.append(Source(id="This document", text=req.document))
+    try:
+        graph = build_session_graph(enrich_sources(graph_sources))
+        embed_segments(graph)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"segments": len(retrievable_nodes(graph)), "sources": len(graph_sources)}

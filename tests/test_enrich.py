@@ -1,14 +1,29 @@
 """Offline tests for enrichment caching/batching (enricher call stubbed)."""
-from dataclasses import dataclass
+import pytest
+from isaacus.types.ilgs.v1 import Document
 
 import grounding.enrich as enrich_mod
+import grounding.store as store
 from grounding.enrich import enrich_sources
 from grounding.models import Source
 
 
-@dataclass
-class FakeDoc:
-    text: str
+def _doc(text: str) -> Document:
+    return Document(
+        text=text, type="contract", version="ilgs@1",
+        segments=[], crossreferences=[], external_documents=[], terms=[],
+        persons=[], dates=[], quotes=[], locations=[], emails=[],
+        websites=[], phone_numbers=[], id_numbers=[], headings=[], junk=[],
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path, monkeypatch):
+    # Isolate the durable disk cache so write-through doesn't touch the real cache/.
+    monkeypatch.setattr(store, "_ENRICH_DIR", tmp_path / "enrich")
+    monkeypatch.setattr(store, "_EMB_DIR", tmp_path / "emb")
+    monkeypatch.setattr(store, "_WS_DIR", tmp_path / "workspaces")
+    enrich_mod._ENRICH_CACHE.clear()
 
 
 def _install_stub(monkeypatch, fail_keys=None):
@@ -19,14 +34,13 @@ def _install_stub(monkeypatch, fail_keys=None):
     def fake(texts):
         state["calls"] += 1
         state["batch_sizes"].append(len(texts))
-        return [None if t in fail_keys else FakeDoc(text=t) for t in texts]
+        return [None if t in fail_keys else _doc(t) for t in texts]
 
     monkeypatch.setattr(enrich_mod, "_enrich_texts", fake)
     return state
 
 
 def test_cache_hit_makes_no_calls_on_repeat(monkeypatch):
-    enrich_mod._ENRICH_CACHE.clear()
     state = _install_stub(monkeypatch)
     srcs = [Source(id="a", text="alpha text")]
 
@@ -40,7 +54,6 @@ def test_cache_hit_makes_no_calls_on_repeat(monkeypatch):
 
 
 def test_batches_capped_at_eight(monkeypatch):
-    enrich_mod._ENRICH_CACHE.clear()
     state = _install_stub(monkeypatch)
     srcs = [Source(id=str(i), text=f"text-{i}") for i in range(10)]
 
@@ -51,7 +64,6 @@ def test_batches_capped_at_eight(monkeypatch):
 
 
 def test_failed_source_falls_back_to_not_ok(monkeypatch):
-    enrich_mod._ENRICH_CACHE.clear()
     _install_stub(monkeypatch, fail_keys={"bad text"})
     srcs = [Source(id="ok", text="good text"), Source(id="bad", text="bad text")]
 

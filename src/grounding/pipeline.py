@@ -45,16 +45,26 @@ def _norm(text: str) -> str:
 
 def _self_exclude(graph: SessionGraph, claim_text: str) -> frozenset[str]:
     """Node keys to exclude for this claim: the document segment(s) that contain
-    the claim verbatim — so a claim is never grounded by its own copy. Other
-    sources are never excluded (a source that genuinely states the claim IS
-    valid support)."""
+    the claim verbatim AND every document segment that follows it. A claim must
+    only be grounded by content that precedes it in the document (or by external
+    sources) — later restatements would let the document support itself.
+    Other sources are never excluded."""
     norm = _norm(claim_text)
     if not norm:
         return frozenset()
-    return frozenset(
-        k for k, n in graph.nodes.items()
-        if n.source_id == _DOC_SOURCE_ID and norm in _norm(n.text)
-    )
+
+    excluded: set[str] = set()
+    for k, n in graph.nodes.items():
+        if n.source_id == _DOC_SOURCE_ID and norm in _norm(n.text):
+            excluded.add(k)
+
+    if excluded:
+        cutoff = max(graph.nodes[k].span_end for k in excluded)
+        for k, n in graph.nodes.items():
+            if n.source_id == _DOC_SOURCE_ID and n.span_start >= cutoff:
+                excluded.add(k)
+
+    return frozenset(excluded)
 
 
 def _process_claim(

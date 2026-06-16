@@ -1,7 +1,7 @@
 {
-  "name": "legal-claim-grounding-addin",
+  "name": "claim-verifier-addin",
   "version": "1.0.0",
-  "description": "Word add-in for legal claim grounding via Isaacus",
+  "description": "Claim Verifier — Word add-in for extractive legal-claim grounding via Isaacus",
   "scripts": {
     "start": "office-addin-debugging start addin/manifest.xml desktop --app word",
     "stop": "office-addin-debugging stop addin/manifest.xml",

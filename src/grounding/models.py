@@ -80,3 +80,13 @@ class VerifySummary(BaseModel):
 class VerifyResponse(BaseModel):
     claims: list[ClaimResult]
     summary: VerifySummary
+
+
+class Workspace(BaseModel):
+    """A user's saved working state for one main document: the sources they added
+    and their prior verification results, so reopening restores the review."""
+    id: str
+    document_hash: str = ""                 # hash of the main document at last save
+    sources: list[Source] = Field(default_factory=list)
+    results: dict[str, ClaimResult] = Field(default_factory=dict)  # claim text → result
+    updated_at: float = 0.0

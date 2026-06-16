@@ -12,6 +12,9 @@ build/
 vector_cache/
 *.jsonl.cache
 
+# Durable knowledge-graph cache + workspaces
+cache/
+
 # Node / Office add-in tooling
 node_modules/
 

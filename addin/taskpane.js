@@ -1,4 +1,4 @@
-/* ── Legal Claim Grounding — Word task pane ───────────────────────── */
+/* ── Claim Verifier — Word task pane ──────────────────────────────── */
 
 const DEFAULT_API_URL = "https://localhost:8000";
 const STORAGE_KEY_SOURCES = "lcg_sources";
@@ -17,35 +17,112 @@ const KIND_TAG = { file: "FILE", document: "DOCUMENT", paste: "TEXT" };
 const RELATION_TAG = { seed: "MATCH", crossref: "CROSS-REF", term: "DEFINITION", external: "EXTERNAL" };
 const DOC_SOURCE_ID = "This document";   // reserved id the backend gives the open document
 
+const WS_SETTING_KEY = "lcg_workspace_id";   // stored in Office document.settings
+
 /* ── State ────────────────────────────────────────────────────────── */
 let sources = [];          // [{id, text, kind}]
-let lastResults = [];      // ClaimResult[]
+let lastResults = [];      // ClaimResult[] currently rendered
+let savedResults = {};     // claim text → ClaimResult (the persisted review log)
 let selectedText = "";     // currently selected text in the Word document
 let apiUrl = DEFAULT_API_URL;
+let workspaceId = null;    // per-document id (lives in document.settings)
+let lastDocHash = "";      // hash of the document at last save (stale detection)
 
 /* ── DOM refs ────────────────────────────────────────────────────── */
 const $ = id => document.getElementById(id);
 
 /* ── Init ────────────────────────────────────────────────────────── */
 Office.onReady(() => {
-  loadState();
-  renderSources();
+  apiUrl = localStorage.getItem(STORAGE_KEY_API_URL) || DEFAULT_API_URL;
   renderApiUrl();
   renderClaimPill();          // show correct initial state (no "Scanning…")
   pollSelection();            // poll selection every 1s
   bindEvents();
+  initWorkspace();            // restore sources + prior results for this document
 });
 
-function loadState() {
+/* Get-or-create a per-document workspace id (persisted in the .docx itself). */
+function initWorkspace() {
   try {
-    sources = JSON.parse(localStorage.getItem(STORAGE_KEY_SOURCES) || "[]");
-    apiUrl  = localStorage.getItem(STORAGE_KEY_API_URL) || DEFAULT_API_URL;
-  } catch (_) { sources = []; }
+    const settings = Office.context.document.settings;
+    workspaceId = settings.get(WS_SETTING_KEY);
+    if (!workspaceId) {
+      workspaceId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      settings.set(WS_SETTING_KEY, workspaceId);
+      settings.saveAsync(() => restoreWorkspace());
+    } else {
+      restoreWorkspace();
+    }
+  } catch (_) {
+    // Not in a Word document (e.g. preview) — fall back to local sources.
+    try { sources = JSON.parse(localStorage.getItem(STORAGE_KEY_SOURCES) || "[]"); } catch (_) {}
+    renderSources();
+    renderClaimPill();
+  }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY_SOURCES, JSON.stringify(sources));
+/* Load saved sources + results from the server; migrate old localStorage once. */
+async function restoreWorkspace() {
+  try {
+    const resp = await fetch(`${apiUrl}/workspace/${encodeURIComponent(workspaceId)}`);
+    if (resp.ok) {
+      const ws = await resp.json();
+      sources = ws.sources || [];
+      savedResults = ws.results || {};
+      lastDocHash = ws.document_hash || "";
+    } else {
+      // No workspace yet — migrate sources from the old localStorage store, once.
+      try {
+        const old = JSON.parse(localStorage.getItem(STORAGE_KEY_SOURCES) || "[]");
+        if (old.length) { sources = old; persistWorkspace(); }
+      } catch (_) {}
+    }
+  } catch (_) { /* server unreachable — leave empty */ }
+
+  renderSources();
+  renderClaimPill();
+  renderRestoredResults();
+  prewarm();                  // warm the durable cache so the first verify is instant
+}
+
+/* Persist the current sources + review log to the server (per document). */
+function persistWorkspace() {
+  if (!workspaceId) return;
+  const body = JSON.stringify({
+    id: workspaceId,
+    document_hash: lastDocHash,
+    sources: sources,
+    results: savedResults,
+  });
+  fetch(`${apiUrl}/workspace/${encodeURIComponent(workspaceId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body,
+  }).catch(() => {});
+}
+
+/* Pre-enrich + embed the document and sources so the first verify is instant. */
+async function prewarm() {
+  try {
+    const { text } = await readCurrentDocument();
+    fetch(`${apiUrl}/index`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: text, sources: sources.map(s => ({ id: s.id, text: s.text })) }),
+    }).catch(() => {});
+  } catch (_) {}
+}
+
+function saveState() {           // apiUrl is a machine setting; sources live in the workspace
   localStorage.setItem(STORAGE_KEY_API_URL, apiUrl);
+  persistWorkspace();
+}
+
+/* A small, dependency-free string hash for stale-document detection. */
+function hashText(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + ":" + str.length;
 }
 
 /* ── Event wiring ────────────────────────────────────────────────── */
@@ -260,9 +337,18 @@ async function handleVerify() {
       throw new Error(err.detail || `HTTP ${resp.status}`);
     }
     const data = await resp.json();
-    lastResults = data.claims || [];
-    renderResults(lastResults);
-    await highlightInDocument(lastResults);
+    const claims = data.claims || [];
+
+    // Merge into the persistent review log (re-verified claims move to newest).
+    lastDocHash = hashText(documentText);
+    for (const r of claims) {
+      delete savedResults[r.text];
+      savedResults[r.text] = r;
+    }
+    persistWorkspace();
+
+    renderRestoredResults();          // show the running review, newest first
+    await highlightInDocument(claims);
   } catch (err) {
     $("results-area").innerHTML = `<div class="error-msg">Error: ${escHtml(err.message)}</div>`;
   } finally {
@@ -271,12 +357,19 @@ async function handleVerify() {
 }
 
 /* ── Results rendering ────────────────────────────────────────────── */
-function renderResults(claims) {
-  if (!claims.length) {
-    $("results-area").innerHTML = `<p class="status-msg">No claim detected in the selection.</p>`;
+
+/* Render the saved review log (newest first); also the live post-verify view. */
+function renderRestoredResults() {
+  const list = Object.values(savedResults);
+  if (!list.length) {
+    lastResults = [];
+    $("results-area").innerHTML =
+      `<p class="status-msg">Verified claims are saved here and restored when you reopen this document.</p>`;
     return;
   }
-  $("results-area").innerHTML = claims.map((r, i) => resultCard(r, i)).join("");
+  lastResults = list.slice().reverse();   // newest first; idx aligns with toggleEvidence
+  const header = `<div class="ws-resumed">${lastResults.length} saved · ${sources.length} source${sources.length !== 1 ? "s" : ""}</div>`;
+  $("results-area").innerHTML = header + lastResults.map((r, i) => resultCard(r, i)).join("");
 }
 
 function resultCard(r, idx) {
