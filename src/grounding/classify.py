@@ -37,8 +37,9 @@ Verdict = Literal["supported", "contradicted", "unaddressed", "weak"]
 
 # ── Thresholds (calibrated in eval/calibrate.py against ContractNLI dev) ───────
 # Set from the grid search over eval/scores_dev.json (1037 pairs), objective:
-# maximise macro-F1 subject to false-green ≤ 3%.  Result at these values:
-#   F1_supported=0.46  F1_contradicted=0.32  F1_unaddressed=0.63  macro=0.47
+# maximise macro-F1 subject to false-green ≤ 3%.  Result at these values
+# (extended tree, eval/tune2.py):
+#   F1_supported=0.46  F1_contradicted=0.32  F1_unaddressed=0.66  macro=0.48
 #   false-green (predicted supported, truth ≠ supported) = 2.9%
 #
 # τ_sup is deliberately high (0.85): the classifier's p_support distribution for
@@ -49,6 +50,20 @@ _TAU_LOW  = 0.55  # below this for BOTH scores → source is silent → UNADDRES
 _TAU_CON  = 0.7   # p_contra threshold for CONTRADICTED
 _TAU_SUP  = 0.85  # p_support threshold for SUPPORTED (high — see note above)
 _TAU_INEX = 0.9   # max inextractability for SUPPORTED (entity-substitution guard)
+# Added signals (diagnostics showed these separate the weak classes). Defaults
+# below reproduce the original tree exactly, so nothing changes until the grid
+# search promotes better values:
+#   _TAU_MARGIN — required (p_contra − p_support) gap for CONTRADICTED. The gap
+#     separates contradicted (+0.37) from supported (−0.06) far better than the
+#     absolute τ_con. 0.0 ⇒ the old "p_contra > p_support" guard. Kept at 0.0:
+#     on dev the margin only trades contradicted gains for net macro loss — the
+#     p_contra signal itself is too weak (fix at source via eval/contra_sweep.py).
+#   _TAU_UNADDR — inextract above this (with low p_support) ⇒ UNADDRESSED. The
+#     extractor finding no answer is a strong silence signal (unaddressed median
+#     0.85 vs supported 0.09). 1.0 ⇒ rule disabled; 0.7 reclaims weak-bucket
+#     leakage and lifts F1_unaddressed 0.63→0.66 at unchanged false-green.
+_TAU_MARGIN = 0.0
+_TAU_UNADDR = 0.7
 
 
 def _negate(claim: str) -> str:
@@ -113,6 +128,8 @@ def verdict_from_scores(
     tau_con: float = _TAU_CON,
     tau_sup: float = _TAU_SUP,
     tau_inex: float = _TAU_INEX,
+    tau_margin: float = _TAU_MARGIN,
+    tau_unaddr: float = _TAU_UNADDR,
 ) -> tuple[Verdict, float]:
     """
     Pure function: apply the decision tree to cached scores.  No API calls.
@@ -126,9 +143,11 @@ def verdict_from_scores(
         confidence = round(1.0 - max(p_support, p_contra), 4)
         return "unaddressed", confidence
 
-    # Rule 2 — Contradiction: source actively says the opposite.
-    # Guard p_contra > p_support rejects ambiguous passages where both are high.
-    if p_contra > tau_con and p_contra > p_support:
+    # Rule 2 — Contradiction: source actively says the opposite. The margin
+    # (p_contra − p_support) is the real discriminator (see threshold notes); the
+    # absolute τ_con stays as a floor. tau_margin=0.0 reduces this to the old
+    # "p_contra > p_support" guard.
+    if p_contra > tau_con and (p_contra - p_support) > tau_margin:
         confidence = round(p_contra * (1.0 - p_support), 4)
         return "contradicted", confidence
 
@@ -138,6 +157,13 @@ def verdict_from_scores(
     if p_support > tau_sup and inextract < tau_inex:
         confidence = round(p_support * (1.0 - inextract), 4)
         return "supported", confidence
+
+    # Rule 3.5 — Silence by inextractability: the extractor found no answer and
+    # support is weak ⇒ the source does not address the claim. Reclaims pairs
+    # that would otherwise fall to WEAK. tau_unaddr=1.0 disables this rule.
+    if inextract > tau_unaddr and p_support < tau_sup:
+        confidence = round(inextract * (1.0 - p_support), 4)
+        return "unaddressed", confidence
 
     # Rule 4 — Weak: relevant source, but signal is mixed or below threshold
     confidence = round(max(p_support, p_contra), 4)

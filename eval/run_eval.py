@@ -72,44 +72,27 @@ async def eval_document(
     hyp_ids = list(doc["annotation_sets"][0]["annotations"].keys())
     annotations = doc["annotation_sets"][0]["annotations"]
 
-    # Build a synthetic document: one sentence per hypothesis with a citation
-    # marker embedded inside (prevents spaCy from splitting the marker off).
-    hyp_sentences = []
-    for hyp_id in hyp_ids:
-        hyp_text = labels[hyp_id]["hypothesis"]
-        # Append citation inside the sentence so spaCy keeps it as one claim.
-        hyp_sentences.append(f"{hyp_text}, pursuant to the Agreement.")
-
-    document_text = " ".join(hyp_sentences)
+    # Pass the hypotheses as explicit claims against the NDA source. Crucially we
+    # do NOT build a synthetic document from the hypotheses (the old approach,
+    # which grounded the hypotheses against each other → ~96% false-green). Each
+    # claim is verified only against the document's source text.
+    hyps = [labels[hyp_id]["hypothesis"] for hyp_id in hyp_ids]
     source = Source(id=str(doc["id"]), text=doc["text"])
 
     try:
-        response = await verify(document_text, [source])
+        response = await verify(document="", sources=[source], claims=hyps)
     except Exception as exc:
         print(f"  [ERROR] doc {doc['id']}: {exc}")
         return []
 
-    # Index results by claim text prefix (first 40 chars) for matching
-    result_by_prefix: dict[str, str] = {
-        r.text[:40].lower(): r.verdict for r in response.claims
-    }
+    # verify() builds Claim(text=c) verbatim from `claims`, so match by exact text.
+    verdict_by_text: dict[str, str] = {r.text: r.verdict for r in response.claims}
 
     rows = []
-    for hyp_id in hyp_ids:
+    for hyp_id, hyp_text in zip(hyp_ids, hyps):
         truth_label = annotations[hyp_id]["choice"]
         truth_verdict = _LABEL_MAP[truth_label]
-        hyp_text = labels[hyp_id]["hypothesis"]
-        prefix = hyp_text[:40].lower()
-
-        predicted = result_by_prefix.get(prefix)
-        if predicted is None:
-            # Fallback: try partial match
-            for key, verdict in result_by_prefix.items():
-                if prefix[:20] in key or key[:20] in prefix:
-                    predicted = verdict
-                    break
-        if predicted is None:
-            predicted = "unmatched"
+        predicted = verdict_by_text.get(hyp_text, "unmatched")
 
         acceptable = predicted in _ACCEPTABLE.get(truth_verdict, set())
         rows.append({

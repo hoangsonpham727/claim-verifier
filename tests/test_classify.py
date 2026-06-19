@@ -57,11 +57,21 @@ def test_verdict_weak_when_support_high_but_inextractable():
 
 
 def test_verdict_weak_when_both_mid_and_ambiguous():
-    # Both above τ_low but neither clears its rule → WEAK
+    # Both above τ_low, neither clears its rule, and the extractor DID find a
+    # span (low inextract) → no silence signal → WEAK
+    verdict, conf = verdict_from_scores(
+        p_support=0.55, p_contra=0.55, inextract=0.3
+    )
+    assert verdict == "weak"
+
+
+def test_verdict_unaddressed_when_mid_support_but_inextractable():
+    # Mid support but the extractor finds no answer (inextract > τ_unaddr) → the
+    # source does not actually address the claim → UNADDRESSED, not WEAK.
     verdict, conf = verdict_from_scores(
         p_support=0.55, p_contra=0.55, inextract=0.9
     )
-    assert verdict == "weak"
+    assert verdict == "unaddressed"
 
 
 # ── Integration tests: live API via classify_verdict ─────────────────────────

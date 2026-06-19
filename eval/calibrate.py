@@ -29,10 +29,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from grounding.chunk import chunk_source
-from grounding.classify import classify_scores, verdict_from_scores
-from grounding.extract import extract_span
-from grounding.rerank import rerank
+from grounding.classify import verdict_from_scores
+from grounding.ground import SemchunkRetriever, ground
+from grounding.models import Source
 
 _LABEL_MAP = {
     "Entailment":    "supported",
@@ -54,40 +53,35 @@ def load_split(split: str) -> tuple[list[dict], dict]:
 
 # ── Stage 1: cache raw scores ─────────────────────────────────────────────────
 
-def _score_one(claim: str, source_id: str, source_text: str, chunks: list[str]) -> dict:
-    """Run the full signal pipeline for one hypothesis; return raw scores."""
-    reranked = rerank(claim, source_id, chunks, top_k=3)
-    relevance = reranked[0].score if reranked else 0.0
-    best_passage = reranked[0].text if reranked else source_text
+def _score_one(claim: str, retriever: SemchunkRetriever) -> dict:
+    """Run the unified grounding core for one hypothesis; return raw scores.
 
-    span, inextract = extract_span(claim, [best_passage], relevance_confirmed=True)
-    answer_score = span.score if span else 0.0
-
-    # Classifier sees the FULL source (auto-chunks) — robust to retrieval miss.
-    p_support, p_contra, _ = classify_scores(claim, [source_text])
-
+    `also_reranked=True` additionally classifies on the reranked top-k passages
+    so the classifier-input A/B (full-source vs candidates) can be tuned offline.
+    """
+    g = ground(claim, retriever, top_k=3, classifier_input="source",
+               also_reranked=True)
     return {
-        "relevance":    round(relevance, 4),
-        "p_support":    round(p_support, 4),
-        "p_contra":     round(p_contra, 4),
-        "inextract":    round(inextract, 4),
-        "answer_score": round(answer_score, 4),
+        "relevance":     round(g.relevance, 4),
+        "p_support":     round(g.p_support, 4),     # full source
+        "p_contra":      round(g.p_contra, 4),      # full source
+        "p_support_rr":  None if g.p_support_rr is None else round(g.p_support_rr, 4),
+        "p_contra_rr":   None if g.p_contra_rr is None else round(g.p_contra_rr, 4),
+        "inextract":     round(g.inextract, 4),
+        "answer_score":  round(g.answer_score, 4),
     }
 
 
 async def _score_document(doc: dict, labels: dict) -> list[dict]:
     annotations = doc["annotation_sets"][0]["annotations"]
-    source_text = doc["text"]
     source_id = str(doc["id"])
-    chunks = chunk_source(source_text)
+    retriever = SemchunkRetriever([Source(id=source_id, text=doc["text"])])
 
     hyp_ids = list(annotations.keys())
 
     async def _one(hyp_id: str) -> dict:
         claim = labels[hyp_id]["hypothesis"]
-        scores = await asyncio.to_thread(
-            _score_one, claim, source_id, source_text, chunks
-        )
+        scores = await asyncio.to_thread(_score_one, claim, retriever)
         scores["doc_id"] = doc["id"]
         scores["hyp_id"] = hyp_id
         scores["truth"] = _LABEL_MAP[annotations[hyp_id]["choice"]]

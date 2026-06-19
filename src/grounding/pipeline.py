@@ -1,42 +1,48 @@
 """
-Orchestration over the session-level document graph.
+Orchestration for claim verification.
 
 verify(document, sources) → VerifyResponse
 
-Per request:
-  enrich sources → build graph → embed segments (once, shared)
-Per cited claim (fanned out via asyncio.to_thread):
-  retrieve seed segments → route (gather evidence) → extract span → classify → ClaimResult
+Per request a retrieval backend is built once and shared across claims; each
+cited claim is then grounded via the unified core in ground.py
+(retrieve → extract → classify → verdict).
 
-The verdict is produced by the classifier on the FULL seed-source text (unchanged
-calibrated thresholds in classify.py). Routing enriches the human-facing evidence
-and supplies the extractor's seed text — it does not feed the classifier.
+Backend (env GROUNDING_BACKEND):
+  semchunk (default) — chunk sources with semchunk, rerank the union of chunks.
+  ildgs              — enrich → graph → embed → route (cross-reference aware).
+
+Both backends feed the SAME classifier/verdict logic, so production and the eval
+harnesses (calibrate.py, run_eval.py) share one path and cannot diverge.
 """
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 
-from .classify import classify_verdict
 from .enrich import enrich_sources
-from .extract import extract_span
-from .graph import build_session_graph, retrievable_nodes, SessionGraph
-from .models import (
-    Claim,
-    ClaimResult,
-    EvidenceItem,
-    RankedPassage,
-    Source,
-    VerifyResponse,
-    VerifySummary,
+from .ground import (
+    ClassifierInput,
+    IldgsRetriever,
+    Retriever,
+    SemchunkRetriever,
+    ground,
+    to_claim_result,
 )
-from .retrieve import PREFILTER_K, embed_segments, retrieve
-from .route import route
+from .graph import build_session_graph, retrievable_nodes, SessionGraph
+from .models import Claim, ClaimResult, Source, VerifyResponse, VerifySummary
+from .retrieve import PREFILTER_K, RERANK_K, embed_segments
 from .segment import segment_claims
 
-# The main document is enriched into the graph under this reserved source id so
-# its OWN clauses (definitions, cross-referenced sections) are available for
-# grounding. A claim's own clause is excluded from its evidence (see _self_exclude).
+# The main document is added as a source under this reserved id so its OWN clauses
+# (definitions, cross-referenced sections) are available for grounding. A claim is
+# never grounded by its own clause (see _self_exclude / SemchunkRetriever).
 _DOC_SOURCE_ID = "This document"
+
+# Which text the verdict classifier reads. "source" (full source, auto-chunked)
+# is robust to silence and is the calibrated default; "candidates" feeds only the
+# reranked passages (see eval Workstream 1). Override via env for experiments.
+_CLASSIFIER_INPUT: ClassifierInput = os.getenv("GROUNDING_CLASSIFIER_INPUT", "source")  # type: ignore[assignment]
 
 
 def _norm(text: str) -> str:
@@ -44,97 +50,59 @@ def _norm(text: str) -> str:
 
 
 def _self_exclude(graph: SessionGraph, claim_text: str) -> frozenset[str]:
-    """Node keys to exclude for this claim: the document segment(s) that contain
-    the claim verbatim AND every document segment that follows it. A claim must
-    only be grounded by content that precedes it in the document (or by external
-    sources) — later restatements would let the document support itself.
-    Other sources are never excluded."""
+    """ILDGS-backend self-exclusion: drop the document segment(s) that contain
+    the claim verbatim AND every later document segment. A claim may only be
+    grounded by content preceding it (or by other sources)."""
     norm = _norm(claim_text)
     if not norm:
         return frozenset()
-
     excluded: set[str] = set()
     for k, n in graph.nodes.items():
         if n.source_id == _DOC_SOURCE_ID and norm in _norm(n.text):
             excluded.add(k)
-
     if excluded:
         cutoff = max(graph.nodes[k].span_end for k in excluded)
         for k, n in graph.nodes.items():
             if n.source_id == _DOC_SOURCE_ID and n.span_start >= cutoff:
                 excluded.add(k)
-
     return frozenset(excluded)
+
+
+def _build_retriever(document: str, sources: list[Source]) -> Retriever:
+    """Build the shared retrieval backend once per request."""
+    all_sources = list(sources)
+    has_doc = bool(document.strip())
+    if has_doc:
+        all_sources.append(Source(id=_DOC_SOURCE_ID, text=document))
+
+    if os.getenv("GROUNDING_BACKEND", "semchunk").lower() == "ildgs":
+        graph = build_session_graph(enrich_sources(all_sources))
+        n_nodes = len(retrievable_nodes(graph))
+        fires = not os.getenv("GROUNDING_NO_EMBED") and n_nodes > PREFILTER_K
+        seg_embeddings = embed_segments(graph) if fires else {}
+        if os.getenv("GROUNDING_EMBED_TRACE"):
+            print(f"[embed-trace] nodes={n_nodes} prefilter_k={PREFILTER_K} "
+                  f"embedder_fired={fires}", file=sys.stderr)
+        return IldgsRetriever(
+            graph, seg_embeddings,
+            exclude_fn=lambda c: _self_exclude(graph, c),
+        )
+
+    return SemchunkRetriever(
+        all_sources,
+        self_exclude_source_id=_DOC_SOURCE_ID if has_doc else None,
+    )
 
 
 def _process_claim(
     claim: Claim,
-    graph: SessionGraph,
-    seg_embeddings: dict,
-    exclude: frozenset[str] = frozenset(),
+    retriever: Retriever,
     include_passages: bool = False,
 ) -> ClaimResult:
-    """Full pipeline for one cited claim — synchronous, called via to_thread."""
-    claim_text = claim.text
-
-    ranked = retrieve(graph, claim_text, seg_embeddings, exclude=exclude)
-    if not ranked:
-        return ClaimResult(
-            text=claim.text,
-            range_ref=claim.range_ref,
-            verdict="unaddressed",
-            confidence=0.0,
-        )
-
-    # Gather evidence by following graph edges from the seed(s). The external-source
-    # expansion costs a rerank call, so only run it when evidence is requested.
-    evidence = route(graph, ranked, claim_text, expand_external=include_passages)
-    seed = evidence[0]
-    best_source_text = graph.source_text[seed.source_id]
-
-    # Char-precise span from the seed clause (stable offsets into seed.text).
-    span, inextract = extract_span(claim_text, [seed.text], relevance_confirmed=True)
-    answer_score = span.score if span else 0.0
-
-    # 4-rule verdict on the FULL seed-source text (classify.py thresholds).
-    verdict, confidence, cls_span = classify_verdict(
-        claim_text, [best_source_text], inextract=inextract
-    )
-
-    if verdict == "unaddressed":
-        final_span = None
-    elif verdict == "weak":
-        final_span = span if answer_score > 0.3 else cls_span
-    else:
-        final_span = span or cls_span
-
-    # Deprecated `passages` shim: down-project evidence so the current add-in keeps
-    # rendering. The seed carries the exact extracted line; runners-up are passage-only.
-    passages: list[RankedPassage] = []
-    if include_passages:
-        for ev in evidence:
-            is_seed = ev.relation == "seed" and ev.text == seed.text
-            passages.append(
-                RankedPassage(
-                    source_id=ev.source_id,
-                    score=ev.score or 0.0,
-                    passage=ev.text,
-                    line=span.text if (is_seed and span) else None,
-                    line_start=span.start if (is_seed and span) else None,
-                    line_end=span.end if (is_seed and span) else None,
-                )
-            )
-
-    return ClaimResult(
-        text=claim.text,
-        range_ref=claim.range_ref,
-        verdict=verdict,
-        confidence=confidence,
-        span=final_span,
-        source_id=seed.source_id,
-        evidence=evidence,
-        passages=passages,
-    )
+    """Ground one cited claim via the unified core — synchronous (to_thread)."""
+    g = ground(claim.text, retriever, top_k=RERANK_K,
+               classifier_input=_CLASSIFIER_INPUT, with_line=True)
+    return to_claim_result(claim, g, include_passages=include_passages)
 
 
 async def verify(
@@ -149,8 +117,6 @@ async def verify(
 
     Claims come from the explicit ``claims`` list (the add-in's selection) when
     given; otherwise the document is segmented and its cited sentences are used.
-    The document is always enriched into the graph so same-document
-    cross-references resolve; a claim is never grounded by its own clause.
     """
     sources = sources or []
     if claims is not None:
@@ -170,22 +136,11 @@ async def verify(
             ),
         )
 
-    # The graph spans the SOURCES plus the main document itself (so same-document
-    # cross-references resolve). Built/embedded once, shared across claim threads.
-    graph_sources = list(sources)
-    if document.strip():
-        graph_sources.append(Source(id=_DOC_SOURCE_ID, text=document))
-    graph = build_session_graph(enrich_sources(graph_sources))
-    seg_embeddings = (
-        embed_segments(graph) if len(retrievable_nodes(graph)) > PREFILTER_K else {}
-    )
+    retriever = _build_retriever(document, sources)
 
     results: list[ClaimResult] = await asyncio.gather(
         *[
-            asyncio.to_thread(
-                _process_claim, claim, graph, seg_embeddings,
-                _self_exclude(graph, claim.text), include_passages,
-            )
+            asyncio.to_thread(_process_claim, claim, retriever, include_passages)
             for claim in cited
         ]
     )
