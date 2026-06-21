@@ -1,6 +1,13 @@
+from pathlib import Path
+
 from docx import Document
 from docx.shared import Pt
 import pymupdf
+
+# Sample documents are a shared, language-neutral asset (../shared/samples),
+# resolved relative to this file so the script works from any working directory.
+SAMPLES = Path(__file__).resolve().parent.parent / "shared" / "samples"
+SAMPLES.mkdir(parents=True, exist_ok=True)
 
 # ── 1) Main Word document the user opens in Word ──────────────────────────────
 doc = Document()
@@ -56,8 +63,8 @@ for heading, body in sections:
     doc.add_heading(heading, level=2)
     doc.add_paragraph(body)
 
-doc.save("samples/NDA-2024.docx")
-print("wrote samples/NDA-2024.docx")
+doc.save(str(SAMPLES / "NDA-2024.docx"))
+print(f"wrote {SAMPLES / 'NDA-2024.docx'}")
 
 # ── 2) External source file (PDF) the user uploads ────────────────────────────
 pdf = pymupdf.open()
@@ -85,8 +92,8 @@ y = 72
 for ln in lines:
     page.insert_text((72, y), ln, fontsize=11)
     y += 20
-pdf.save("samples/Master-Services-Agreement.pdf")
-print("wrote samples/Master-Services-Agreement.pdf")
+pdf.save(str(SAMPLES / "Master-Services-Agreement.pdf"))
+print(f"wrote {SAMPLES / 'Master-Services-Agreement.pdf'}")
 
 # ── 3) Second external source (PDF) — Data Processing Addendum ─────────────────
 # Covers topics NOT in the NDA or MSA, so the demo claims resolve unambiguously:
@@ -116,5 +123,5 @@ y = 72
 for ln in dpa_lines:
     dpa_page.insert_text((72, y), ln, fontsize=11)
     y += 20
-dpa.save("samples/Data-Processing-Addendum.pdf")
-print("wrote samples/Data-Processing-Addendum.pdf")
+dpa.save(str(SAMPLES / "Data-Processing-Addendum.pdf"))
+print(f"wrote {SAMPLES / 'Data-Processing-Addendum.pdf'}")

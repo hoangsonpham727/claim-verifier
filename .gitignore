@@ -22,11 +22,15 @@ node_modules/
 .claude/settings.local.json
 
 # ContractNLI eval data (large, separately licensed — download locally, do not redistribute)
-eval/contract-nli/
-eval/*.zip
+python/eval/contract-nli/
+python/eval/*.zip
 
 # Cached calibration scores (regenerate with eval/calibrate.py cache)
-eval/scores_*.json
+python/eval/scores_*.json
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
 
 # Office temp/lock files
 ~$*
