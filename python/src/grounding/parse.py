@@ -1,8 +1,7 @@
-"""
-Shared document-text extraction.
+"""Turn an uploaded PDF / DOCX / TXT into plain text.
 
-Single source of truth for turning an uploaded PDF / DOCX / TXT into plain
-text, reused by both the Streamlit UI and the FastAPI `/extract` endpoint.
+Single source of truth for file parsing, shared by the Streamlit UI and the
+FastAPI /extract endpoint.
 """
 from __future__ import annotations
 

@@ -17,7 +17,7 @@ import os
 import ssl
 from pathlib import Path
 
-PORT = 3001
+PORT = 3002
 ADDIN_DIR = Path(__file__).resolve().parent
 CERT_DIR = Path.home() / ".office-addin-dev-certs"
 CERT = CERT_DIR / "localhost.crt"

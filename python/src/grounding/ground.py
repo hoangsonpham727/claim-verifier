@@ -1,19 +1,22 @@
-"""Unified per-claim grounding core.
+"""Per-claim grounding core: retrieve → extract → classify → verdict.
 
-One path shared by production (pipeline.py) and the eval harnesses
-(calibrate.py, run_eval.py) so they cannot diverge again. Retrieval backend is
-pluggable; the verdict logic and classifier call are identical across backends.
+Production (pipeline.py) and the eval harnesses (calibrate.py, run_eval.py) both
+call this one path, so they cannot drift apart. Retrieval is pluggable; the
+verdict logic is identical whichever backend is used.
 
-Retrieval backends (build once per request, reused across claims):
-  SemchunkRetriever (default) — chunk each source with semchunk, rerank the
-    union of chunks across sources, return the top_k as Candidates.
-  IldgsRetriever (opt-in, GROUNDING_BACKEND=ildgs) — the enrich → graph → embed
-    → route path, wrapped to emit the same Candidate shape.
+Retrieval backends — built once per request, reused across claims:
+  SemchunkRetriever (default)  chunk each source with semchunk, rerank the union
+                               of chunks, return the top_k as Candidates.
+  IldgsRetriever (GROUNDING_BACKEND=ildgs)
+                               enrich → graph → embed → route, emitting the same
+                               Candidate shape so callers don't care which ran.
 
-classifier_input selects what the verdict classifier reads:
-  "source"     — full source text of the seed (auto-chunked; robust to silence,
-                 the current production behaviour).
-  "candidates" — only the reranked top_k passages (Workstream-1 experiment).
+classifier_input controls what the verdict classifier reads:
+  "source"      full text of the seed's source (auto-chunked). Production
+                default — reading everything is what makes a silent source
+                distinguishable from a retrieval miss.
+  "candidates"  only the reranked passages. Kept for offline comparison; it
+                cannot tell silence from a retrieval miss, so don't ship it.
 """
 from __future__ import annotations
 

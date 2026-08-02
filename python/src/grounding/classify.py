@@ -1,30 +1,24 @@
-"""Classify whether passages support a claim; derive verdict + confidence.
+"""Verdict logic: turn classifier scores into supported/contradicted/unaddressed.
 
-Four-verdict decision tree using two independent classifier calls:
-  p_support = P(source establishes claim)
-  p_contra  = P(source establishes NOT claim)
+Two independent classifier calls give two signals — they are NOT a probability
+distribution and need not sum to 1:
+  p_support = P(source establishes the claim)
+  p_contra  = P(source establishes the claim's negation)
 
-These are NOT a probability distribution — the universal classifier runs each
-hypothesis independently. p_support + p_contra can be 0.3 + 0.7, 0.8 + 0.1,
-or 0.6 + 0.5.  Treat them as independent signals.
+Sequential decision tree, first match wins:
+  1. max(p_support, p_contra) < τ_low           → UNADDRESSED (source is silent)
+  2. p_contra > τ_con and p_contra > p_support  → CONTRADICTED
+  3. p_support > τ_sup and inextract < τ_inex   → SUPPORTED
+  4. otherwise                                   → WEAK
 
-Decision tree (sequential — first match wins):
-  1. max(p_support, p_contra) < τ_low          → UNADDRESSED (source is silent)
-  2. p_contra > τ_con AND p_contra > p_support  → CONTRADICTED
-  3. p_support > τ_sup AND inextract < τ_inex   → SUPPORTED
-  4. else                                        → WEAK
+Why UNADDRESSED comes from the classifier, not the reranker: a low reranker
+score is ambiguous — the source may be genuinely silent, or it may support the
+claim while retrieval simply missed the right chunk. Both look identical. The
+classifier reads the FULL source (auto-chunking internally), so two low scores
+mean real silence. The reranker only picks the extractor's passage; it never
+decides a verdict.
 
-KEY DESIGN POINT — UNADDRESSED is detected by the CLASSIFIER, not the reranker.
-An earlier version gated UNADDRESSED on the reranker relevance score, but that
-conflates two distinct cases: (a) the source is genuinely silent, and (b) the
-source supports the claim but embedder-based retrieval failed to surface the
-right chunk.  Both produce relevance ≈ 0.  The classifier auto-chunks the FULL
-source text, so when both p_support and p_contra are low the source is truly
-silent — robust to retrieval failure.  The reranker is now used only to pick the
-best passage for the extractor, never for the verdict.
-
-Thresholds are calibrated offline in eval/calibrate.py — run one score-caching
-pass over ContractNLI dev, then grid-search.  The values below are the result.
+Thresholds below are grid-searched offline by eval/calibrate.py.
 """
 from __future__ import annotations
 
@@ -35,33 +29,29 @@ from .models import SupportingSpan
 
 Verdict = Literal["supported", "contradicted", "unaddressed", "weak"]
 
-# ── Thresholds (calibrated in eval/calibrate.py against ContractNLI dev) ───────
-# Set from the grid search over eval/scores_dev.json (1037 pairs), objective:
-# maximise macro-F1 subject to false-green ≤ 3%.  Result at these values
-# (extended tree, eval/tune2.py):
-#   F1_supported=0.46  F1_contradicted=0.32  F1_unaddressed=0.66  macro=0.48
+# ── Calibrated thresholds ─────────────────────────────────────────────────────
+# Grid-searched over eval/scores_dev.json (ContractNLI dev, 1037 pairs) to
+# maximise macro-F1 subject to false-green ≤ 3%. Result at these values:
+#   F1: supported 0.46 · contradicted 0.32 · unaddressed 0.66 · macro 0.48
 #   false-green (predicted supported, truth ≠ supported) = 2.9%
 #
-# τ_sup is deliberately high (0.85): the classifier's p_support distribution for
-# truly-supported vs not-supported overlaps heavily below ~0.6, so a high bar is
-# the only way to keep false-green under 3%.  Cost is supported recall (~37%) —
-# an accepted trade in a legal tool where a false green is worse than a false amber.
-_TAU_LOW  = 0.55  # below this for BOTH scores → source is silent → UNADDRESSED
-_TAU_CON  = 0.7   # p_contra threshold for CONTRADICTED
-_TAU_SUP  = 0.85  # p_support threshold for SUPPORTED (high — see note above)
+# τ_sup is deliberately high: p_support for truly-supported vs not-supported
+# overlaps heavily below ~0.6, so a high bar is the only way to hold false-green
+# under 3%. It costs recall (~37%) — the right trade for a legal tool, where a
+# false "supported" is far worse than a cautious "needs review".
+_TAU_LOW  = 0.55  # both scores below this → source is silent → UNADDRESSED
+_TAU_CON  = 0.7   # p_contra needed for CONTRADICTED
+_TAU_SUP  = 0.85  # p_support needed for SUPPORTED (see note above)
 _TAU_INEX = 0.9   # max inextractability for SUPPORTED (entity-substitution guard)
-# Added signals (diagnostics showed these separate the weak classes). Defaults
-# below reproduce the original tree exactly, so nothing changes until the grid
-# search promotes better values:
-#   _TAU_MARGIN — required (p_contra − p_support) gap for CONTRADICTED. The gap
-#     separates contradicted (+0.37) from supported (−0.06) far better than the
-#     absolute τ_con. 0.0 ⇒ the old "p_contra > p_support" guard. Kept at 0.0:
-#     on dev the margin only trades contradicted gains for net macro loss — the
-#     p_contra signal itself is too weak (fix at source via eval/contra_sweep.py).
-#   _TAU_UNADDR — inextract above this (with low p_support) ⇒ UNADDRESSED. The
-#     extractor finding no answer is a strong silence signal (unaddressed median
-#     0.85 vs supported 0.09). 1.0 ⇒ rule disabled; 0.7 reclaims weak-bucket
-#     leakage and lifts F1_unaddressed 0.63→0.66 at unchanged false-green.
+
+# _TAU_MARGIN — minimum (p_contra − p_support) gap for CONTRADICTED. Held at 0.0,
+#   which reduces to the plain "p_contra > p_support" guard: on dev, requiring a
+#   gap traded contradicted gains for a net macro-F1 loss because p_contra itself
+#   is the weak signal.
+# _TAU_UNADDR — inextract above this (with low p_support) ⇒ UNADDRESSED. The
+#   extractor finding no answer is strong evidence of silence (median 0.85 for
+#   unaddressed vs 0.09 for supported); 1.0 disables the rule, 0.7 lifts
+#   F1_unaddressed 0.63 → 0.66 at unchanged false-green.
 _TAU_MARGIN = 0.0
 _TAU_UNADDR = 0.7
 

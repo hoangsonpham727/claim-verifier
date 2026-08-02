@@ -1,17 +1,18 @@
-"""Durable, content-addressed disk cache + per-document workspace store.
+"""Durable disk cache for expensive API artifacts, plus per-document workspaces.
 
-The expensive API artifacts — ILDGS enrichment Documents and segment embeddings —
-are persisted on disk keyed by content hash, so reopening an unchanged document
-regenerates nothing (even across server restarts). Workspaces persist a user's
-sources + prior results per document.
+Enrichment Documents and segment embeddings cost real API calls, so both are
+persisted keyed by content hash. Reopening an unchanged document regenerates
+nothing, even across restarts; editing one clause only invalidates that clause.
+Workspaces store a user's sources and prior verdicts for a given document.
 
-Layout (under CACHE_DIR, default ./cache, override with env CACHE_DIR):
-    enrich/<sha256>.json      one ILDGS Document (model_dump_json)
-    emb/<sha256>.npy          one L2-normalized float32 embedding vector
-    workspaces/<id>.json      a Workspace record
+Layout, rooted at env CACHE_DIR (default ./cache, relative to the process CWD —
+so running from python/ gives python/cache/):
+    enrich/<sha256>.json     one ILDGS Document (model_dump_json)
+    emb/<sha256>.npy         one L2-normalized float32 embedding vector
+    workspaces/<id>.json     one Workspace record
 
-Content-addressed keys mean a concurrent write of the same key writes identical
-bytes, and a changed input yields a new key — so the cache is never stale.
+Because keys are content hashes, the cache is never stale (changed input ⇒ new
+key) and concurrent writers of the same key write identical bytes.
 """
 from __future__ import annotations
 

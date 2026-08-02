@@ -1,8 +1,9 @@
-"""Split a source document into passages for reranking.
+"""Split a source document into discrete passages for reranking.
 
-The reranker (and the extractor/classifier downstream) auto-chunk internally,
-but we still need *discrete* passages so the reranker can score them against
-each other — that is what powers passage selection and the top-3 evidence list.
+The models auto-chunk internally, so this is not about fitting a context window.
+It is about producing *separately scoreable units*: the reranker can only rank
+passages against each other if we hand it a list, and those ranked passages are
+what become the seed for extraction and the evidence list shown to the user.
 """
 from __future__ import annotations
 

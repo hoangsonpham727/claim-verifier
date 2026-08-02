@@ -1,3 +1,10 @@
+"""Pydantic schemas shared by the engine, the FastAPI service, and the tests.
+
+Roughly in pipeline order: Source and Claim are inputs; Candidate, SupportingSpan
+and EvidenceItem are intermediate retrieval/grounding results; ClaimResult and
+VerifyResponse are what the API returns; Workspace is the per-document state the
+add-in saves and restores.
+"""
 from __future__ import annotations
 
 from typing import Literal, Optional

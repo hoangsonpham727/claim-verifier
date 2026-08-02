@@ -1,18 +1,14 @@
-"""
-Orchestration for claim verification.
+"""Orchestration: verify(document, sources) → VerifyResponse.
 
-verify(document, sources) → VerifyResponse
+Segments the document, keeps the cited claims, then grounds each one through
+ground.py (retrieve → extract → classify → verdict), fanning out across claims.
+The retrieval backend is built once per request and shared by every claim.
 
-Per request a retrieval backend is built once and shared across claims; each
-cited claim is then grounded via the unified core in ground.py
-(retrieve → extract → classify → verdict).
+Backend selected by env GROUNDING_BACKEND:
+  semchunk (default)  chunk sources, rerank the union of chunks.
+  ildgs               enrich → graph → embed → route; resolves cross-references.
 
-Backend (env GROUNDING_BACKEND):
-  semchunk (default) — chunk sources with semchunk, rerank the union of chunks.
-  ildgs              — enrich → graph → embed → route (cross-reference aware).
-
-Both backends feed the SAME classifier/verdict logic, so production and the eval
-harnesses (calibrate.py, run_eval.py) share one path and cannot diverge.
+Both feed the same verdict logic, so production and eval cannot diverge.
 """
 from __future__ import annotations
 
